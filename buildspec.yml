@@ -6,30 +6,36 @@ phases:
       python: 3.12
     commands:
       - pip install -r requirements.txt
+
   pre_build:
     commands:
       - echo "Running lint checks"
       - flake8 app.py test_app.py --max-line-length=120
       - echo "Running unit tests"
       - pytest -q
-      - echo "Logging in to Amazon ECR"
+      - echo "Validating ECR repository URI"
+      - test -n "$ECR_URI" || (echo "ERROR: ECR_URI environment variable is empty" && exit 1)
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - AWS_REGION=${AWS_DEFAULT_REGION}
-      - REPOSITORY_URI=${ECR_URI}
+      - REPOSITORY_URI="$ECR_URI"
+      - echo "Using ECR repository $REPOSITORY_URI"
       - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
   build:
     commands:
       - echo "Building Docker image"
-      - IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION}
-      - IMAGE_TAG=$(echo "$IMAGE_TAG" | cut -c 1-7)
+      - IMAGE_TAG=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c 1-7)
+      - test -n "$REPOSITORY_URI" || (echo "ERROR: REPOSITORY_URI is empty" && exit 1)
       - docker build -t "$REPOSITORY_URI:$IMAGE_TAG" .
       - docker tag "$REPOSITORY_URI:$IMAGE_TAG" "$REPOSITORY_URI:latest"
+
   post_build:
     commands:
       - echo "Pushing image to Amazon ECR"
       - docker push "$REPOSITORY_URI:$IMAGE_TAG"
       - docker push "$REPOSITORY_URI:latest"
       - printf '[{"name":"exp9-app","imageUri":"%s"}]' "$REPOSITORY_URI:$IMAGE_TAG" > imagedefinitions.json
+
 artifacts:
   files:
     - imagedefinitions.json
